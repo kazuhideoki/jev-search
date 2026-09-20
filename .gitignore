@@ -4,3 +4,14 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+node_modules/
+raycast/dist/
+raycast/raycast-env.d.ts
+.jev-cache/
+raycast/assets/local-worker.cjs
+# Personal benchmark inputs/results stay on this machine.
+raycast/reports/
+raycast/benchmarks/home-cases.json
+raycast/benchmark.mjs
+raycast/home-benchmark.mjs
+raycast/ranking-benchmark.mjs
