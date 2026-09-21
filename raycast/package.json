@@ -2,7 +2,7 @@
   "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "jev-search",
   "title": "Jev Search",
-  "description": "Progressive natural-language search of local text files with Jev",
+  "description": "Local indexed search of documents and source code",
   "icon": "icon.png",
   "author": "kazuhide",
   "license": "MIT",
@@ -12,43 +12,18 @@
       "title": "Search Local Files",
       "description": "自然言語でsrc・Downloads・マイドライブ・iCloudの文書をローカル検索",
       "mode": "view",
-      "preferences": [{
-        "name": "nodePath",
-        "title": "Node.js Path",
-        "description": "Optional path to Node.js for the local index process. Detected automatically when omitted.",
-        "type": "textfield",
-        "required": false
-      }]
-    },
-    {
-      "name": "search",
-      "title": "Search Files with Jev",
-      "description": "Find text files using natural language and progressive excerpt evaluation",
-      "mode": "view"
+      "preferences": [
+        {
+          "name": "nodePath",
+          "title": "Node.js Path",
+          "description": "Optional path to Node.js for the local index process. Detected automatically when omitted.",
+          "type": "textfield",
+          "required": false
+        }
+      ]
     }
   ],
   "preferences": [
-    {
-      "name": "root",
-      "title": "Search Directory",
-      "description": "Used only by Search Files with Jev. Cloud evaluation is restricted to this directory.",
-      "type": "directory",
-      "required": false
-    },
-    {
-      "name": "apiKey",
-      "title": "TypeSafe API Key",
-      "description": "Optional: without a key, search stays local. Excerpts are sent to TypeSafe when a key is configured.",
-      "type": "password",
-      "required": false
-    },
-    {
-      "name": "envFile",
-      "title": "API Key File",
-      "description": "Optional .env file containing TYPESAFE_API_KEY. The password preference takes precedence.",
-      "type": "file",
-      "required": false
-    },
     {
       "name": "rgPath",
       "title": "Ripgrep Path",
