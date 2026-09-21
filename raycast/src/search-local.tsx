@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import { homedir } from "node:os";
 import path from "node:path";
 import { startLocalWorker } from "./worker-client.mjs";
-import { EXAMPLES } from "./examples.mjs";
 
 type Index = { count: number; builtAt: string; stats: { skipped: number; scopeErrors: string[]; errors?: Record<string, number> } };
 type Result = { path: string; relative: string; title: string; matched: string[]; truncated: boolean; score?: number | null };
@@ -190,8 +189,6 @@ export default function Command() {
     >
       {!query.trim() ? (
         <List.Section title={status} subtitle="通常は外部送信なし · ⌘⇧RでJev評価">
-          {EXAMPLES.map((example, i) => <List.Item key={example.title} id={`example-${i}`} title={example.title} subtitle="検索例" icon={Icon.MagnifyingGlass}
-            actions={<ActionPanel><Action title="この例で検索" icon={Icon.MagnifyingGlass} onAction={() => input(example.query)} />{refreshAction}{scopeHelpAction}</ActionPanel>} />)}
           <List.Item id="scope" title={SCOPE} subtitle={incomplete ? `読込除外 ${index.stats.skipped.toLocaleString()}件・列挙エラー ${index.stats.scopeErrors.length}件` : "UTF-8の文書・ソースコード"} icon={Icon.Folder}
             actions={<ActionPanel>{refreshAction}{scopeHelpAction}</ActionPanel>} />
         </List.Section>
@@ -216,13 +213,13 @@ export default function Command() {
               <Action title={detail ? "抜粋を隠す" : "根拠の抜粋を表示"} icon={Icon.Sidebar} shortcut={{ modifiers: ["cmd", "shift"], key: "d" }} onAction={() => setDetail((value) => !value)} />
               {refreshAction}{scopeHelpAction}
               {preferencesAction}
-              <Action title="検索例に戻る" icon={Icon.MagnifyingGlass} onAction={() => input("")} />
+              <Action title="検索をクリア" icon={Icon.MagnifyingGlass} onAction={() => input("")} />
             </ActionPanel>} />)}
         </List.Section>
       )}
       <List.EmptyView title={indexError || searchError || (loading ? progress : index && !snapshot?.complete ? "検索中…" : "候補がありません")}
         description={loading ? "初回の索引作成には約30秒かかります。入力した検索文は準備後に検索します。" : "別の言葉を加えるか、⌘⇧Iで索引を更新してください。"}
-        actions={<ActionPanel>{refineAction}{refreshAction}{scopeHelpAction}{preferencesAction}<Action title="検索例に戻る" onAction={() => input("")} /></ActionPanel>} />
+        actions={<ActionPanel>{refineAction}{refreshAction}{scopeHelpAction}{preferencesAction}<Action title="検索をクリア" onAction={() => input("")} /></ActionPanel>} />
     </List>
   );
 }
