@@ -1,11 +1,11 @@
-import { Action, ActionPanel, Icon, List, Toast, environment, getPreferenceValues, showToast, openCommandPreferences } from "@raycast/api";
+import { Action, ActionPanel, Detail, Icon, List, Toast, environment, getPreferenceValues, showToast, openCommandPreferences } from "@raycast/api";
 import { useEffect, useRef, useState } from "react";
 import { homedir } from "node:os";
 import path from "node:path";
 import { startLocalWorker } from "./worker-client.mjs";
 import { EXAMPLES } from "./examples.mjs";
 
-type Index = { count: number; builtAt: string; stats: { skipped: number; scopeErrors: string[] } };
+type Index = { count: number; builtAt: string; stats: { skipped: number; scopeErrors: string[]; errors?: Record<string, number> } };
 type Result = { path: string; relative: string; title: string; matched: string[]; truncated: boolean; score?: number | null };
 type Snapshot = { stage?: number; evaluated?: number; skipped?: number; results: Result[]; elapsedMs: number; complete: boolean; errors: string[] };
 type WorkerEvent =
@@ -25,6 +25,7 @@ export default function Command() {
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState("索引を読み込んでいます");
   const [indexError, setIndexError] = useState("");
+  const [latestIndexFailure, setLatestIndexFailure] = useState("");
   const [query, setQuery] = useState("");
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [searchError, setSearchError] = useState("");
@@ -36,6 +37,7 @@ export default function Command() {
   const [preview, setPreview] = useState<{ path: string; text: string }>();
   const worker = useRef<Awaited<ReturnType<typeof startLocalWorker>> | null>(null);
   const refreshing = useRef(false);
+  const refreshFromToast = useRef<() => void>(() => {});
   const generation = useRef(0);
   const previewGeneration = useRef(0);
 
@@ -45,15 +47,20 @@ export default function Command() {
     evaluationBusy.current = false; setEvaluating(false);
     setSnapshot(undefined); setIndex(undefined); setSelected(undefined); setSearchError("");
     setLoading(true);
-    setIndexError("");
+    setIndexError(""); setLatestIndexFailure("");
     startLocalWorker({ script: path.join(environment.assetsPath, "local-worker.cjs"), root: ROOT, cachePath: CACHE, rgPath, nodePath,
       onEvent: (event: WorkerEvent) => {
         if (!active) return;
         if (event.event === "ready") {
-          setIndex(event.metadata); setLoading(false); setIndexError("");
+          setIndex(event.metadata); setLoading(false); setIndexError(""); setLatestIndexFailure("");
           if (event.metadata.stats.scopeErrors.length) {
             setIndexError(`一部の場所は読込不可 · ${event.metadata.count.toLocaleString()}件を検索可能`);
-            void showToast({ style: Toast.Style.Failure, title: "一部の場所を読み取れません", message: event.metadata.stats.scopeErrors.join(" / ") });
+            void showToast({
+              style: Toast.Style.Failure,
+              title: "索引に読み取れなかった場所があります",
+              message: "索引作成時の記録です。再作成で現在の状態を確認できます。続く場合は「読込エラーと対処方法」を確認してください。",
+              primaryAction: { title: "索引を再作成", onAction: (toast) => { void toast.hide(); refreshFromToast.current(); } },
+            });
           } else if (refreshing.current) void showToast({ style: Toast.Style.Success, title: "索引を更新しました", message: `${event.metadata.count.toLocaleString()}件` });
           refreshing.current = false;
         } else if (event.event === "progress") {
@@ -69,7 +76,7 @@ export default function Command() {
           setPreview({ path: path.join(ROOT, event.relative), text: event.text });
         } else if (event.event === "error") {
           if (event.operation === "index") {
-            evaluationBusy.current = false; setEvaluating(false); setIndexError(event.message); setLoading(false); refreshing.current = false;
+            evaluationBusy.current = false; setEvaluating(false); setIndexError(event.message); setLatestIndexFailure(event.message); setLoading(false); refreshing.current = false;
             void showToast({ style: Toast.Style.Failure, title: "索引の処理を完了できませんでした", message: event.message });
           }
           else if (event.id === generation.current) {
@@ -145,6 +152,29 @@ export default function Command() {
     }
   };
   const refreshAction = <Action title="ローカル索引を再作成（Jev評価は⌘⇧R）" icon={Icon.ArrowClockwise} shortcut={{ modifiers: ["cmd", "shift"], key: "i" }} onAction={refresh} />;
+  refreshFromToast.current = refresh;
+  const scopeErrors = [
+    ...(index?.stats.scopeErrors ?? []),
+    ...Object.entries(index?.stats.errors ?? {}).filter(([code]) => /^(EPERM|EACCES)$/.test(code)).map(([code, count]) => `本文読込: ${code} (${count}件)`),
+    ...(latestIndexFailure ? [`最新の索引処理の失敗: ${latestIndexFailure}`] : []),
+  ];
+  const permissionError = scopeErrors.some((error) => /\b(?:EPERM|EACCES)\b/.test(error));
+  const scopeHelp = <Action.Push title="読込エラーと対処方法" icon={Icon.Info}
+    target={<Detail markdown={[
+      "# 一部の場所を読み取れません",
+      "使用中の索引の列挙エラー・本文のアクセス拒否と、最新の索引処理の失敗を表示します。再作成に失敗した場合は、以前の索引の記録が残ることがあります。現在のアクセス状態を確認するには、戻って **⌘⇧I** で索引を再作成してください。読めた場所の検索は続けられます。",
+      ...(permissionError ? [
+        "## アクセス権限を確認",
+        "EPERM / EACCES はアクセスを拒否されたことを示します。macOSの「システム設定 → プライバシーとセキュリティ」で、Raycastの「ファイルとフォルダ」の許可を確認してください。個別のスイッチを変更できない場合は、「プライバシーとセキュリティ → フルディスクアクセス」でRaycastのスイッチを確認してください。「ファイルとフォルダ」にある「フルディスクアクセス」という文字だけでは、許可が有効か判断できません。",
+        "Google Driveの場合は、Google Driveアプリが起動していることと、Finderで対象フォルダを開けることも確認してください。設定変更後はRaycastを再起動し、⌘⇧Iで索引を再作成してください。",
+      ] : []),
+      "## 索引作成時のエラー",
+      "```text\n" + scopeErrors.join("\n").replace(/```/g, "｀｀｀") + "\n```",
+    ].join("\n\n")} actions={<ActionPanel>
+      <Action.Open title="プライバシー設定を開く" target="x-apple.systempreferences:com.apple.preference.security?Privacy" />
+      <Action.CopyToClipboard title="エラーをコピー" content={scopeErrors.join("\n")} />
+    </ActionPanel>} />} />;
+  const scopeHelpAction = scopeErrors.length ? scopeHelp : null;
   const count = index?.count.toLocaleString();
   const date = index ? new Date(index.builtAt).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
   const mode = snapshot?.stage ? `Jev最大${snapshot.stage}件 · ${snapshot.evaluated}件評価済み${snapshot.skipped ? ` · 対象外/読込不可${snapshot.skipped}件` : ""}` : "ローカル検索";
@@ -161,9 +191,9 @@ export default function Command() {
       {!query.trim() ? (
         <List.Section title={status} subtitle="通常は外部送信なし · ⌘⇧RでJev評価">
           {EXAMPLES.map((example, i) => <List.Item key={example.title} id={`example-${i}`} title={example.title} subtitle="検索例" icon={Icon.MagnifyingGlass}
-            actions={<ActionPanel><Action title="この例で検索" icon={Icon.MagnifyingGlass} onAction={() => input(example.query)} />{refreshAction}</ActionPanel>} />)}
+            actions={<ActionPanel><Action title="この例で検索" icon={Icon.MagnifyingGlass} onAction={() => input(example.query)} />{refreshAction}{scopeHelpAction}</ActionPanel>} />)}
           <List.Item id="scope" title={SCOPE} subtitle={incomplete ? `読込除外 ${index.stats.skipped.toLocaleString()}件・列挙エラー ${index.stats.scopeErrors.length}件` : "UTF-8の文書・ソースコード"} icon={Icon.Folder}
-            actions={<ActionPanel>{refreshAction}</ActionPanel>} />
+            actions={<ActionPanel>{refreshAction}{scopeHelpAction}</ActionPanel>} />
         </List.Section>
       ) : (
         <List.Section title={status} subtitle={snapshot ? `${Math.round(snapshot.elapsedMs)}ms · ${snapshot.stage === 80 ? "最大範囲まで評価済み" : snapshot.stage === 20 ? "⌘⇧Rで最大80件へ" : "⌘⇧RでJev評価"}` : undefined}>
@@ -184,7 +214,7 @@ export default function Command() {
               <Action.ShowInFinder path={item.path} />
               <Action.CopyToClipboard title="パスをコピー" content={item.path} shortcut={{ modifiers: ["cmd"], key: "c" }} />
               <Action title={detail ? "抜粋を隠す" : "根拠の抜粋を表示"} icon={Icon.Sidebar} shortcut={{ modifiers: ["cmd", "shift"], key: "d" }} onAction={() => setDetail((value) => !value)} />
-              {refreshAction}
+              {refreshAction}{scopeHelpAction}
               {preferencesAction}
               <Action title="検索例に戻る" icon={Icon.MagnifyingGlass} onAction={() => input("")} />
             </ActionPanel>} />)}
@@ -192,7 +222,7 @@ export default function Command() {
       )}
       <List.EmptyView title={indexError || searchError || (loading ? progress : index && !snapshot?.complete ? "検索中…" : "候補がありません")}
         description={loading ? "初回の索引作成には約30秒かかります。入力した検索文は準備後に検索します。" : "別の言葉を加えるか、⌘⇧Iで索引を更新してください。"}
-        actions={<ActionPanel>{refineAction}{refreshAction}{preferencesAction}<Action title="検索例に戻る" onAction={() => input("")} /></ActionPanel>} />
+        actions={<ActionPanel>{refineAction}{refreshAction}{scopeHelpAction}{preferencesAction}<Action title="検索例に戻る" onAction={() => input("")} /></ActionPanel>} />
     </List>
   );
 }
