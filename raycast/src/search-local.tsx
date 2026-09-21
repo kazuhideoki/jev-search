@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { homedir } from "node:os";
 import path from "node:path";
 import { startLocalWorker } from "./worker-client.mjs";
+import { scheduleSelectionReset } from "./selection-reset.mjs";
 
 type Index = { count: number; builtAt: string; stats: { skipped: number; scopeErrors: string[]; errors?: Record<string, number> } };
 type Result = { path: string; relative: string; title: string; matched: string[]; truncated: boolean; score?: number | null };
@@ -32,6 +33,10 @@ export default function Command() {
   const [evaluationProgress, setEvaluationProgress] = useState("");
   const evaluationBusy = useRef(false);
   const [selected, setSelected] = useState<string>();
+  // Only command selection when results change. Echoing keyboard selection
+  // into selectedItemId makes Raycast scroll to that row on every arrow press.
+  const [selectionTarget, setSelectionTarget] = useState<string>();
+  const selectionReset = useRef<ReturnType<typeof scheduleSelectionReset> | null>(null);
   const [detail, setDetail] = useState(false);
   const [preview, setPreview] = useState<{ path: string; text: string }>();
   const worker = useRef<Awaited<ReturnType<typeof startLocalWorker>> | null>(null);
@@ -43,8 +48,9 @@ export default function Command() {
   useEffect(() => {
     let active = true;
     generation.current++;
+    selectionReset.current?.cancel();
     evaluationBusy.current = false; setEvaluating(false);
-    setSnapshot(undefined); setIndex(undefined); setSelected(undefined); setSearchError("");
+    setSnapshot(undefined); setIndex(undefined); setSelected(undefined); setSelectionTarget(undefined); setSearchError("");
     setLoading(true);
     setIndexError(""); setLatestIndexFailure("");
     startLocalWorker({ script: path.join(environment.assetsPath, "local-worker.cjs"), root: ROOT, cachePath: CACHE, rgPath, nodePath,
@@ -68,7 +74,8 @@ export default function Command() {
         } else if (event.event === "results" && event.id === generation.current) {
           evaluationBusy.current = false; setEvaluating(false);
           setSnapshot(event.snapshot);
-          setSelected((previous) => event.snapshot.results.some((item) => item.path === previous) ? previous : event.snapshot.results[0]?.path);
+          setSelectionTarget(undefined);
+          setSelected(event.snapshot.results[0]?.path);
         } else if (event.event === "refining" && event.id === generation.current) {
           setEvaluationProgress(`Jevで最大${event.target}件を評価中 · ${event.evaluated}/${event.total}件`);
         } else if (event.event === "preview" && event.id === previewGeneration.current) {
@@ -98,10 +105,12 @@ export default function Command() {
   const input = (value: string) => {
     // Raycast can echo a programmatic searchText change back through this callback.
     if (value === query) return;
+    selectionReset.current?.cancel();
     generation.current++;
     worker.current?.send({ type: "cancel" });
     evaluationBusy.current = false; setEvaluating(false);
     setSelected(undefined);
+    setSelectionTarget(undefined);
     setSnapshot(undefined);
     setSearchError("");
     setQuery(value);
@@ -115,6 +124,12 @@ export default function Command() {
     }, 150);
     return () => { clearTimeout(timer); generation.current++; worker.current?.send({ type: "cancel" }); };
   }, [index, query]);
+
+  useEffect(() => {
+    const reset = scheduleSelectionReset(snapshot?.results[0]?.path, setSelectionTarget);
+    selectionReset.current = reset;
+    return () => reset.cancel();
+  }, [snapshot]);
 
   useEffect(() => {
     const id = ++previewGeneration.current;
@@ -131,7 +146,9 @@ export default function Command() {
       void showToast({ style: Toast.Style.Success, title: "最大80件まで評価済みです", message: "別の言葉を加えて検索範囲を変えてください。" }); return;
     }
     if (!apiKey && !envFile) { void openCommandPreferences(); return; }
+    selectionReset.current?.cancel();
     evaluationBusy.current = true; setEvaluating(true); setSearchError("");
+    setSelectionTarget(undefined);
     setEvaluationProgress(`Jevで最大${snapshot.stage === 20 ? 80 : 20}件を評価中`);
     const id = ++generation.current;
     if (!worker.current?.send({ type: "refine", id, query })) {
@@ -143,7 +160,9 @@ export default function Command() {
   const preferencesAction = <Action title="Jevの設定" icon={Icon.Gear} onAction={() => openCommandPreferences()} />;
   const refresh = () => {
     if (loading) return;
+    selectionReset.current?.cancel();
     generation.current++; evaluationBusy.current = false; setEvaluating(false); setSnapshot(undefined); setSearchError("");
+    setSelected(undefined); setSelectionTarget(undefined);
     refreshing.current = true; setLoading(true); setIndexError(""); setProgress("索引を更新しています");
     if (!worker.current?.send({ type: "rebuild" })) {
       refreshing.current = false; setLoading(false);
@@ -182,8 +201,8 @@ export default function Command() {
   return (
     <List filtering={false} searchText={query} onSearchTextChange={input}
       isLoading={loading || evaluating || (!!query.trim() && !!index && !snapshot?.complete && !searchError && !indexError)}
-      isShowingDetail={detail && !!query.trim()} selectedItemId={selected}
-      onSelectionChange={(id) => setSelected(id ?? undefined)} navigationTitle="Search Local Files"
+      isShowingDetail={detail && !!query.trim()} selectedItemId={selectionTarget}
+      onSelectionChange={(id) => { selectionReset.current?.observe(id); setSelected(id ?? undefined); }} navigationTitle="Search Local Files"
       searchBarPlaceholder="探している内容を文章で入力してください"
       searchBarAccessory={<List.Dropdown tooltip={SCOPE} value="personal" onChange={() => {}}><List.Dropdown.Item value="personal" title="よく使う場所" /></List.Dropdown>}
     >
