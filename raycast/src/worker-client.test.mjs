@@ -38,10 +38,18 @@ test("worker builds, queues a search, returns bounded results and previews, refr
     assert.match((await waitFor((e) => e.event === "preview" && e.id === 2)).text, /reference load/);
     client.send({ type: "search", id: 3, query: "zzzxqnotfound" });
     assert.equal((await waitFor((e) => e.event === "results" && e.id === 3)).snapshot.results.length, 0);
+    client.send({ type: "refine", id: 4, query: "different-query" });
+    assert.equal((await waitFor(e => e.event === "error" && e.id === 4)).operation, "refine");
+    // No matches means no API request. A stale file must not block a direct key.
+    client.send({ type: "configure", apiKey: "fixture", envFile: path.join(root, "missing.env") });
+    client.send({ type: "refine", id: 5, query: "zzzxqnotfound" });
+    const refined = await waitFor(e => e.event === "results" && e.id === 5);
+    assert.equal(refined.snapshot.stage, 20);
+    assert.equal(refined.snapshot.evaluated, 0);
     await writeFile(path.join(root, "Downloads", "new.md"), "# New instrument\ncalibration instrument");
     client.send({ type: "rebuild" });
     assert.equal((await waitFor((e) => e.event === "ready" && e.metadata.count === 2)).metadata.count, 2);
-    assert(!events.some((e) => e.event === "error"));
+    assert(!events.some((e) => e.event === "error" && e.id !== 4));
   } finally {
     client?.dispose();
     if (client) await client.exited;
