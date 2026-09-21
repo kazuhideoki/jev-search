@@ -5,6 +5,7 @@
 ```sh
 npm ci --prefix raycast
 npm test --prefix raycast
+node --test raycast/benchmarks/*.test.mjs
 npm run typecheck --prefix raycast
 python3 -m unittest -q
 npm run build --prefix raycast
@@ -27,3 +28,76 @@ Raycastでは`Search Local Files`を開き、検索例、自然文入力、抜�
 自分の文書で精度を測る場合は、調整に使わない質問と正解を先に固定し、候補保持・上位5/100件・API評価枠への採用を別々に数える。同じ質問の反復は独立した質問数に含めない。
 
 架空データのテストが成功しても、未見の自然文に対する検索精度の保証にはならない。PDF/Office、本文64KiB以降、汎用の意味検索は未対応。性能測定では索引作成・読込・順位計算・画面表示の区間を分ける。
+
+## 精度・速度・コストの比較実験
+
+以下は本番ロジックを変更しない実験用スクリプト。追加依存・外部APIは不要。
+`experimental-ranking.mjs` は本番と同じ採点を使う上位件数限定の選択、および同義語展開・文書種別優先度の比較を提供する。
+
+```sh
+# 架空文書の診断（語彙不一致、記号、否定、長文、正解なし）
+node raycast/benchmarks/evaluate-local.mjs
+
+# 模擬索引の規模別測定。各コマンドを順番に実行して負荷の干渉を避ける
+node --expose-gc raycast/benchmarks/evaluate-local.mjs --scale-only --count 1000
+node --expose-gc raycast/benchmarks/evaluate-local.mjs --scale-only --count 10000
+node --expose-gc raycast/benchmarks/evaluate-local.mjs --scale-only --count 50000
+
+# 順位を変えない最適化の差分検証（800通りの索引・検索文・上限の組合せ）
+node --test raycast/benchmarks/experimental-ranking.test.mjs
+```
+
+実文書の質問・正解は、検索結果を見る前に `raycast/reports/` 以下の非公開JSONへ固定する。
+スキーマは次の形。root以下の指定リポジトリのGit追跡ファイルを対象とし、通常の除外規則に加えて`runs`・`samples`ディレクトリを除外する。
+
+```json
+{
+  "root": "/absolute/path/to/repositories",
+  "repositories": ["project-a", "project-b"],
+  "cases": [{
+    "id": "case-01",
+    "category": "usage",
+    "query": "探したい内容",
+    "expected": ["project-a/README.md"]
+  }]
+}
+```
+
+```sh
+node --expose-gc raycast/benchmarks/evaluate-local.mjs --manifest raycast/reports/local-evaluation/manifest.json
+node --expose-gc raycast/benchmarks/evaluate-chunks.mjs raycast/reports/local-evaluation raycast/reports/local-evaluation/manifest.json
+node raycast/benchmarks/evaluate-worker.mjs raycast/reports/local-evaluation raycast/reports/local-evaluation/manifest.json
+```
+
+`--out DIR`で通常診断と規模測定の出力先を変更できる。分割・worker測定の第1引数には実文書測定の出力先を渡す。
+結果JSONは索引収録、Hit@1/5/100、MRR@100、順位・一致語、p50/p95、索引作成・保存・読込、ディスク容量を記録する。
+実文書測定にはコミット、manifestと索引メタデータのハッシュも残す。入力文書は固定スナップショットではないため、同一実験の再現には原文も同じ状態である必要がある。
+語彙や重みを結果に合わせて変更した比較は探索用であり、未見評価と呼ばない。期待ファイル以外も有用な場合があるため、Hit@5をPrecision@5と呼ばない。
+
+順位計算の実験はウォームアップ後に方式の実行順を交代させて測る。規模測定は1検索文あたり30回、実文書は1検索文あたり7回で、反復回数を質問数へ加算しない。
+模擬文書の作成時間にはディスクの列挙・読込が含まれない。RSSはNodeランタイムやGC、測定中の一時索引も含み、実アプリの常駐メモリではない。
+worker測定は実際のNode子プロセスとNDJSON通信を含むが、Raycastの描画と150msの入力待ちは含まない。起動・索引読込はOSのファイルキャッシュが温まった状態であり、ディスクのコールド測定ではない。
+外部API料金は今回のローカル比較では0。電力料金・開発に用いたAIの料金は計測しない。
+
+## Jevを含む検索全体の実測
+
+`evaluate-api.mjs` は明示的な外部送信を伴う、20件・80件をそれぞれ独立に評価する比較実験。ローカル検索→候補選択→抜粋→実API評価→最終順位まで計測する。
+Raycastの段階評価とは別経路で、20→80件の評価再利用・候補の継承・失敗時の順位保持は再現しない。
+両予算の合計は最大100件の評価となるため、この実験の時間・費用・順位を、そのままRaycastの段階検索の測定値として扱わない。
+
+```sh
+# 先に --base 内の manifest.json と index.json.gz をローカル比較で作成する
+# 送信予定の全検索文・相対パス・抜粋をローカルに書き出す（API・認証不要）
+node raycast/benchmarks/evaluate-api.mjs --prepare --base raycast/reports/local-evaluation --out raycast/reports/api-run
+
+# 送信予定の内容で実API実験を行う場合のみ実行。既存 .env を使用
+node raycast/benchmarks/evaluate-api.mjs --live --base raycast/reports/local-evaluation --out raycast/reports/api-run
+```
+
+既定は候補20/80件、10件ずつ2並列、抜粋1,800文字、検索ごと15秒。`--budgets 20,80`、`--cases id1,id2`、`--repeats 1`で変更できるが、変更後は別出力先で準備する。
+初回送信前に実行開始を排他的に記録する。開始済み、途中終了、旧リクエスト記録が残った出力先は準備・再送とも拒否する。
+部分実行も自動再開しないため、再実行は追加料金を伴う新しい測定として扱う。
+現在のファイルが索引と異なる場合や、準備済み抜粋と実行時の計画が異なる場合は送信せず停止する。
+検索内容・コード・メモの抜粋はTypeSafeへ送信される。機械的な秘密文字列チェックは非公開情報全般を判別するものではない。
+料金は応答`usage.input_tokens`と単価から換算した推定であり請求書の金額ではない。単価はスクリプト中の確認日・公式URLとともに再確認する。
+通信失敗・使用量欠落・未評価を結果に残す。測定時間は索引常駐後の処理で、索引読込、Raycastの入力待ち、描画を含まない。

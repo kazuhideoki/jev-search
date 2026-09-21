@@ -19,6 +19,20 @@
           "description": "Optional path to Node.js for the local index process. Detected automatically when omitted.",
           "type": "textfield",
           "required": false
+        },
+        {
+          "name": "apiKey",
+          "title": "Jev API Key",
+          "description": "⌘⇧Rで再評価するときだけ使用します。検索文と候補の本文抜粋をTypeSafeへ送信します。",
+          "type": "password",
+          "required": false
+        },
+        {
+          "name": "envFile",
+          "title": "Jev API Key File",
+          "description": "TYPESAFE_API_KEYを含む.envファイル。API Keyを直接設定した場合はそちらを優先。",
+          "type": "file",
+          "required": false
         }
       ]
     }
