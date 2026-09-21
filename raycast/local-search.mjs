@@ -10,11 +10,9 @@ import path from "node:path";
 import { buildIndex, loadIndex, saveIndex } from "./src/local-index.mjs";
 import { queryIndex, termsFor, selectCandidates } from "./src/ranking.mjs";
 import { excerpts } from "./src/engine.mjs";
-import { EXAMPLES } from "./src/examples.mjs";
 
 // This entrypoint is deliberately local-only, including when TYPESAFE_API_KEY is set.
 globalThis.fetch = () => { throw Error("このCLIは外部APIを使用しません"); };
-const examples = EXAMPLES.map((example) => example.query);
 const clean = (s) => String(s).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
 const args = process.argv.slice(2);
 const options = { root: homedir(), personal: true, rebuild: false, json: false, limit: 8, buildOnly: false };
@@ -90,19 +88,16 @@ try {
   if (queryParts.length) await execute(queryParts.join(" "));
   else {
     if (!stdin.isTTY) throw Error("検索文を引数に指定してください。対話検索はターミナルから起動できます。");
-    console.log("\nJev Search — ローカル自然言語検索\n文章を入力してEnter。:1〜:3で実例、:qで終了。\n索引更新: 終了後 ./search-local --rebuild\n");
-    examples.forEach((q, i) => console.log(`:${i + 1} ${q}`));
+    console.log("\nJev Search — ローカル自然言語検索\n文章を入力してEnter。:qで終了。\n索引更新: 終了後 ./search-local --rebuild\n");
     const rl = createInterface({ input: stdin, output: stdout });
     try {
       while (!controller.signal.aborted) {
         const input = (await rl.question("\n検索 > ", { signal: controller.signal })).trim();
         if (input === ":q" || input === "exit") break;
         if (!input) continue;
-        const example = input.match(/^:([123])$/);
         const action = input.match(/^([pof])\s+(\d+)$/);
         try {
-          if (example) await execute(examples[Number(example[1]) - 1]);
-          else if (action) {
+          if (action) {
             const item = lastResults[Number(action[2]) - 1];
             if (!item) { console.log("表示された番号を指定してください。"); continue; }
             if (await realpath(item.path) !== item.path) throw Error("ファイルの場所が変わりました");
